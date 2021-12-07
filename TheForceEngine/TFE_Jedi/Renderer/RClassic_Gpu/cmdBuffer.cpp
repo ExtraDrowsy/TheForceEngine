@@ -263,6 +263,53 @@ namespace TFE_CommandBuffer
 		cmd->quadCount = quadCount;
 	}
 
+	void addFloorAndCeiling(const WallInfo& wallInfo, f32 id)
+	{
+		if (s_sectorQuadCount >= MAX_SECTOR_QUADS) { return; }
+		const f32 flatExt = 200.0f;
+		id = fmodf(id, 10.0f);
+
+		// Floor
+		SectorVertex* quadVtx = &s_sectorVertexData[s_sectorQuadCount * 4];
+		s_sectorQuadCount++;
+
+		quadVtx[0].pos = { wallInfo.v0.x, s_sectorInfo.heights[0], wallInfo.v0.z };
+		quadVtx[0].uv = { 0.01f + id*0.02f, 0.01f + id*0.02f };
+		quadVtx[0].color = max(wallInfo.lightLevel, 0);
+
+		quadVtx[1].pos = { wallInfo.v1.x, s_sectorInfo.heights[0], wallInfo.v1.z };
+		quadVtx[1].uv = { 0.01f + id*0.02f, 0.01f + id*0.02f };
+		quadVtx[1].color = max(wallInfo.lightLevel, 0);
+
+		quadVtx[2].pos = { wallInfo.v1.x, s_sectorInfo.heights[0] + flatExt, wallInfo.v1.z };
+		quadVtx[2].uv = { 0.01f + id*0.02f, 0.01f + id*0.02f };
+		quadVtx[2].color = max(wallInfo.lightLevel, 0);
+
+		quadVtx[3].pos = { wallInfo.v0.x, s_sectorInfo.heights[0] + flatExt, wallInfo.v0.z };
+		quadVtx[3].uv = { 0.01f + id*0.02f, 0.01f + id*0.02f };
+		quadVtx[3].color = max(wallInfo.lightLevel, 0);
+
+		// Ceiling
+		quadVtx = &s_sectorVertexData[s_sectorQuadCount * 4];
+		s_sectorQuadCount++;
+
+		quadVtx[0].pos = { wallInfo.v0.x, s_sectorInfo.heights[1] - flatExt, wallInfo.v0.z };
+		quadVtx[0].uv = { 0.04f + id*0.02f, 0.04f + id*0.02f };
+		quadVtx[0].color = max(wallInfo.lightLevel, 0);
+
+		quadVtx[1].pos = { wallInfo.v1.x, s_sectorInfo.heights[1] - flatExt, wallInfo.v1.z };
+		quadVtx[1].uv = { 0.04f + id*0.02f, 0.04f + id*0.02f };
+		quadVtx[1].color = max(wallInfo.lightLevel, 0);
+
+		quadVtx[2].pos = { wallInfo.v1.x, s_sectorInfo.heights[1], wallInfo.v1.z };
+		quadVtx[2].uv = { 0.04f + id*0.02f, 0.04f + id*0.02f };
+		quadVtx[2].color = max(wallInfo.lightLevel, 0);
+
+		quadVtx[3].pos = { wallInfo.v0.x, s_sectorInfo.heights[1], wallInfo.v0.z };
+		quadVtx[3].uv = { 0.04f + id*0.02f, 0.04f + id*0.02f };
+		quadVtx[3].color = max(wallInfo.lightLevel, 0);
+	}
+
 	void addSolidWall(const WallInfo& wallInfo)
 	{
 		if (s_sectorQuadCount >= MAX_SECTOR_QUADS) { return; }
@@ -293,7 +340,7 @@ namespace TFE_CommandBuffer
 
 		SectorVertex* quadVtx = &s_sectorVertexData[s_sectorQuadCount * 4];
 		s_sectorQuadCount++;
-
+		
 		quadVtx[0].pos = { wallInfo.v0.x, top, wallInfo.v0.z };
 		quadVtx[0].uv  = { wallInfo.uv0.x, wallInfo.uv1.z };
 		quadVtx[0].color = max(wallInfo.lightLevel, 0);

@@ -10,6 +10,9 @@
 #include <TFE_System/math.h>
 #include <TFE_FrontEndUI/console.h>
 
+// DEBUG
+#include <TFE_Input/input.h>
+
 #include "cmdBuffer.h"
 #include "rclassicGpu.h"
 #include "rsectorGpu.h"
@@ -53,7 +56,7 @@ namespace TFE_Jedi
 				const f32 distSq1 = dotFloat(cached1->objPosVS[obj1->index], cached1->objPosVS[obj1->index]);
 				const f32 dist0 = sqrtf(distSq0);
 				const f32 dist1 = sqrtf(distSq1);
-				
+
 				if (obj0->model->isBridge && obj1->model->isBridge)
 				{
 					return signZero(dist1 - dist0);
@@ -172,6 +175,108 @@ namespace TFE_Jedi
 	}
 
 	// Temp
+	enum DrawCmdId : u32
+	{
+		DCMD_DrawSetup,
+		DCMD_PortalInc,
+		DCMD_PortalDec,
+		DCMD_DrawSector,
+		DCMD_DrawObjects,
+		DCMD_Count
+	};
+
+	struct DrawCmd
+	{
+		DrawCmdId cmd;
+		s32 size;
+	};
+
+	struct PortalCmd
+	{
+		DrawCmdId cmd;
+		s32 size;
+
+		s32 quadStart;
+		s32 quadCount;
+		s32 level;
+	};
+
+	struct SectorView
+	{
+		DrawCmdId cmd;
+		s32 size;
+
+		s32 sectorIndex;
+		s32 level;
+	};
+
+	struct SectorObjects
+	{
+		DrawCmdId cmd;
+		s32 size;
+
+		s32 objCount;
+		SecObject** objList;
+	};
+
+	static u8* s_drawCmdBuffer = nullptr;
+	static u32 s_drawCmdBufferSize = 0;
+	static u32 s_drawCmdBufferPtr = 0;
+
+	DrawCmd* drawCmd_allocInternal(DrawCmdId id, u32 size)
+	{
+		// Round to the next multiple of 4, so each allocation is aligned to 4 bytes.
+		size = ((size + 3) >> 2) << 2;
+		if (s_drawCmdBufferPtr + size > s_drawCmdBufferSize)
+		{
+			// Out of room.
+			return nullptr;
+		}
+
+		DrawCmd* drawCmd = (DrawCmd*)&s_drawCmdBuffer[s_drawCmdBufferPtr];
+		drawCmd->cmd = id;
+		drawCmd->size = size;
+		return drawCmd;
+	}
+
+	DrawCmd* drawCmd_alloc(DrawCmdId id, s32 elemCount)
+	{
+		DrawCmd* drawCmd = nullptr;
+		switch (id)
+		{
+		case DCMD_DrawSetup:
+		{
+			drawCmd = drawCmd_allocInternal(id, sizeof(DrawCmd));
+		} break;
+		case DCMD_PortalInc:
+		{
+			drawCmd = drawCmd_allocInternal(id, sizeof(PortalCmd));
+		} break;
+		case DCMD_PortalDec:
+		{
+			drawCmd = drawCmd_allocInternal(id, sizeof(PortalCmd));
+		} break;
+		case DCMD_DrawSector:
+		{
+			drawCmd = drawCmd_allocInternal(id, sizeof(SectorView));
+		} break;
+		case DCMD_DrawObjects:
+		{
+			drawCmd = drawCmd_allocInternal(id, sizeof(SectorObjects) + sizeof(SecObject)*elemCount);
+			if (drawCmd)
+			{
+				((SectorObjects*)drawCmd)->objCount = 0;
+				((SectorObjects*)drawCmd)->objList = (SecObject**)((u8*)drawCmd + sizeof(SectorObjects));
+			}
+		} break;
+		}
+		if (drawCmd)
+		{
+			s_drawCmdBufferPtr += drawCmd->size;
+		}
+		return drawCmd;
+	}
+
 	struct ClipRect
 	{
 		f32 x0, x1;
@@ -187,9 +292,50 @@ namespace TFE_Jedi
 	static bool s_showClipRects = false;
 	static bool s_setupCVar = true;
 
+	static s32 s_maxRecursion = MAX_ADJOIN_DEPTH;
+	static s32 s_maxAdjoinSeg = MAX_ADJOIN_SEG;
+
+	struct RenderEntry
+	{
+		s32 level;
+		RSector* sector;
+		RWall* wall;
+		ClipRect rect;
+	};
+	static RenderEntry s_renderStack[MAX_ADJOIN_SEG];
+	static u32 s_stackPtr = 0;
+	static u32 s_prevPtr = 0;
+	static u32 s_level = 0;
+	static TFE_Sectors_Gpu* s_sectorGpu = nullptr;
+
+	void debugKeys()
+	{
+		if (TFE_Input::keyPressed(KEY_LEFTBRACKET))
+		{
+			s_maxRecursion--;
+			if (s_maxRecursion < 0) { s_maxRecursion = MAX_ADJOIN_DEPTH; }
+		}
+		else if (TFE_Input::keyPressed(KEY_RIGHTBRACKET))
+		{
+			s_maxRecursion++;
+			if (s_maxRecursion > MAX_ADJOIN_DEPTH) { s_maxRecursion = 0; }
+		}
+
+		if (TFE_Input::keyPressed(KEY_9))
+		{
+			s_maxAdjoinSeg--;
+			if (s_maxAdjoinSeg < 0) { s_maxAdjoinSeg = MAX_ADJOIN_SEG; }
+		}
+		else if (TFE_Input::keyPressed(KEY_0))
+		{
+			s_maxAdjoinSeg++;
+			if (s_maxAdjoinSeg > MAX_ADJOIN_SEG) { s_maxAdjoinSeg = 0; }
+		}
+	}
+
 	bool viewRect_push(ClipRect* rect)
 	{
-		if (s_viewStackDepth > MAX_ADJOIN_DEPTH)
+		if (s_viewStackDepth > s_maxRecursion)
 		{
 			return false;
 		}
@@ -198,7 +344,7 @@ namespace TFE_Jedi
 		s_viewRect = &s_viewRectStack[s_viewStackDepth];
 		s_viewStackDepth++;
 
-		TFE_CommandBuffer::setClipRegion((s32)s_viewRect->x0, (s32)s_viewRect->y0, (s32)s_viewRect->x1, (s32)s_viewRect->y1);
+		TFE_CommandBuffer::setClipRegion((s32)s_viewRect->x0, (s32)s_viewRect->y0, (s32)s_viewRect->x1 + 1, (s32)s_viewRect->y1 + 1);
 		return true;
 	}
 
@@ -219,7 +365,7 @@ namespace TFE_Jedi
 		m_cachedSectors = nullptr;
 		m_cachedSectorCount = 0;
 	}
-				
+
 	void TFE_Sectors_Gpu::prepare()
 	{
 		if (s_setupCVar)
@@ -237,7 +383,7 @@ namespace TFE_Jedi
 		s_camera.pos.x = s_rcgpuState.cameraPos.x;
 		s_camera.pos.y = s_rcgpuState.eyeHeight;
 		s_camera.pos.z = s_rcgpuState.cameraPos.z;
-		
+
 		// The GPU renderer can use proper vertical rotation pitch.
 		// Build a compatible view matrix including vertical rotation.
 		f32 sinPitch, cosPitch;
@@ -250,12 +396,12 @@ namespace TFE_Jedi
 		s_camera.viewMtx[4] = cosPitch;
 		s_camera.viewMtx[5] = -s_rcgpuState.cosYaw * sinPitch;
 
-		s_camera.viewMtx[6] =  s_rcgpuState.sinYaw * cosPitch;
+		s_camera.viewMtx[6] = s_rcgpuState.sinYaw * cosPitch;
 		s_camera.viewMtx[7] = -sinPitch;
 		s_camera.viewMtx[8] = -s_rcgpuState.cosYaw * cosPitch;
 
 		// Use the Jedi projection values instead of proper FOV and aspect ratio.
-		Mat4 proj = TFE_Math::computeProjMatrixExplicit(2.0f*s_rcgpuState.focalLength/f32(s_width), 2.0f*s_rcgpuState.focalLenAspect/f32(s_height), 0.01f, 1000.0f);
+		Mat4 proj = TFE_Math::computeProjMatrixExplicit(2.0f*s_rcgpuState.focalLength / f32(s_width), 2.0f*s_rcgpuState.focalLenAspect / f32(s_height), 0.01f, 1000.0f);
 		memcpy(s_camera.projMtx, proj.m, sizeof(f32) * 16);
 		TFE_CommandBuffer::startFrame(&s_camera);
 
@@ -264,11 +410,16 @@ namespace TFE_Jedi
 		rect.x1 = s_width - 1;
 		rect.y0 = 0;
 		rect.y1 = s_height - 1;
-		rect.planeNormal = { 0.0f, 0.0f, -1.0f  };
+		rect.planeNormal = { 0.0f, 0.0f, -1.0f };
 		rect.planeVertex = { 0.0f, 0.0f, -0.02f };
 		viewRect_push(&rect);
+
+		debugKeys();
+		s_sectorGpu = this;
+		s_stackPtr = 0;
+		s_level = 0;
 	}
-	
+
 	void TFE_Sectors_Gpu::endFrame()
 	{
 		viewRect_pop();
@@ -283,9 +434,9 @@ namespace TFE_Jedi
 		const f32 y = fixed16ToFloat(worldPoint->y);
 		const f32 z = fixed16ToFloat(worldPoint->z);
 
-		viewPoint->x = x*s_rcgpuState.cosYaw + z*s_rcgpuState.sinYaw + s_rcgpuState.cameraTrans.x;
+		viewPoint->x = x * s_rcgpuState.cosYaw + z * s_rcgpuState.sinYaw + s_rcgpuState.cameraTrans.x;
 		viewPoint->y = y - s_rcgpuState.eyeHeight;
-		viewPoint->z = z*s_rcgpuState.cosYaw + x*s_rcgpuState.negSinYaw + s_rcgpuState.cameraTrans.z;
+		viewPoint->z = z * s_rcgpuState.cosYaw + x * s_rcgpuState.negSinYaw + s_rcgpuState.cameraTrans.z;
 	}
 
 	static const ClipRect c_emptyRect = { 0 };
@@ -419,29 +570,29 @@ namespace TFE_Jedi
 			f32 pDistA = computePlaneDist(s_viewRect, &vtxVS[a]);
 			f32 pDistB = computePlaneDist(s_viewRect, &vtxVS[b]);
 
-			if (pDistA > 0.0f)
+			if (pDistA >= 0.0f)
 			{
 				vtxVSClipped[clippedVtx++] = vtxVS[a];
 
 				if (pDistB < 0.0f)
 				{
 					f32 s = (0.0f - pDistA) / (pDistB - pDistA);
-					vtxVSClipped[clippedVtx].x = (1.0f - s)*vtxVS[a].x + s*vtxVS[b].x;
-					vtxVSClipped[clippedVtx].y = (1.0f - s)*vtxVS[a].y + s*vtxVS[b].y;
-					vtxVSClipped[clippedVtx].z = (1.0f - s)*vtxVS[a].z + s*vtxVS[b].z;
+					vtxVSClipped[clippedVtx].x = (1.0f - s)*vtxVS[a].x + s * vtxVS[b].x;
+					vtxVSClipped[clippedVtx].y = (1.0f - s)*vtxVS[a].y + s * vtxVS[b].y;
+					vtxVSClipped[clippedVtx].z = (1.0f - s)*vtxVS[a].z + s * vtxVS[b].z;
 					clippedVtx++;
 				}
 			}
-			else if (pDistB > 0.0f)
+			else if (pDistB >= 0.0f)
 			{
 				f32 s = (0.0f - pDistA) / (pDistB - pDistA);
-				vtxVSClipped[clippedVtx].x = (1.0f - s)*vtxVS[a].x + s*vtxVS[b].x;
-				vtxVSClipped[clippedVtx].y = (1.0f - s)*vtxVS[a].y + s*vtxVS[b].y;
-				vtxVSClipped[clippedVtx].z = (1.0f - s)*vtxVS[a].z + s*vtxVS[b].z;
+				vtxVSClipped[clippedVtx].x = (1.0f - s)*vtxVS[a].x + s * vtxVS[b].x;
+				vtxVSClipped[clippedVtx].y = (1.0f - s)*vtxVS[a].y + s * vtxVS[b].y;
+				vtxVSClipped[clippedVtx].z = (1.0f - s)*vtxVS[a].z + s * vtxVS[b].z;
 				clippedVtx++;
 			}
 		}
-		if (!clippedVtx)
+		if (clippedVtx < 3)
 		{
 			return false;
 		}
@@ -455,52 +606,157 @@ namespace TFE_Jedi
 		rect->y1 = -1;
 
 		const f32* projMtx = s_camera.projMtx;
-		const f32 halfWidth  = f32(s_width  / 2);
+		const f32 halfWidth = f32(s_width / 2);
 		const f32 halfHeight = f32(s_height / 2);
 		for (s32 i = 0; i < clippedVtx; i++)
 		{
-			vtxProj[i].x = vtxVSClipped[i].x * projMtx[0]  + vtxVSClipped[i].y * projMtx[1]  + vtxVSClipped[i].z * projMtx[2]  + projMtx[3];
-			vtxProj[i].y = vtxVSClipped[i].x * projMtx[4]  + vtxVSClipped[i].y * projMtx[5]  + vtxVSClipped[i].z * projMtx[6]  + projMtx[7];
-			vtxProj[i].z = vtxVSClipped[i].x * projMtx[8]  + vtxVSClipped[i].y * projMtx[9]  + vtxVSClipped[i].z * projMtx[10] + projMtx[11];
+			vtxProj[i].x = vtxVSClipped[i].x*projMtx[0] + vtxVSClipped[i].y*projMtx[1] + vtxVSClipped[i].z*projMtx[2] + projMtx[3];
+			vtxProj[i].y = vtxVSClipped[i].x*projMtx[4] + vtxVSClipped[i].y*projMtx[5] + vtxVSClipped[i].z*projMtx[6] + projMtx[7];
+			vtxProj[i].z = vtxVSClipped[i].x*projMtx[8] + vtxVSClipped[i].y*projMtx[9] + vtxVSClipped[i].z*projMtx[10] + projMtx[11];
 
 			// pancake it?
 			vtxProj[i].z = max(vtxProj[i].z, 0.001f);
 
-			// assert(vtxProj[i].z >= 0.001f);
-			//if (vtxProj[i].z >= 0.001f)
-			{
-				f32 rcpZ = 1.0f / vtxProj[i].z;
-				posSS[i].x = vtxProj[i].x * rcpZ * halfWidth  + halfWidth;
-				posSS[i].y = vtxProj[i].y * rcpZ * halfHeight + halfHeight;
-				posSS[i].z = vtxProj[i].z * rcpZ;
+			f32 rcpZ = 1.0f / vtxProj[i].z;
+			posSS[i].x = vtxProj[i].x*rcpZ*halfWidth + halfWidth;
+			posSS[i].y = vtxProj[i].y*rcpZ*halfHeight + halfHeight;
 
-				f32 x0 = floorf(posSS[i].x);
-				f32 x1 = floorf(posSS[i].x + 0.5f);
-				f32 y0 = floorf(posSS[i].y);
-				f32 y1 = floorf(posSS[i].y + 0.5f);
+			f32 x0 = floorf(posSS[i].x);
+			f32 x1 = floorf(posSS[i].x);
+			f32 y0 = floorf(posSS[i].y);
+			f32 y1 = floorf(posSS[i].y);
 
-				rect->x0 = min(x0, rect->x0);
-				rect->x1 = max(x1, rect->x1);
-				rect->y0 = min(y0, rect->y0);
-				rect->y1 = max(y1, rect->y1);
-			}
+			rect->x0 = min(x0, rect->x0);
+			rect->x1 = max(x1, rect->x1);
+			rect->y0 = min(y0, rect->y0);
+			rect->y1 = max(y1, rect->y1);
 		}
+		if (rect->x1 - rect->x0 < 1.0f || rect->y1 - rect->y0 < 1.0f) { return false; }
 
 		return true;
+	}
+
+	bool addRenderEntry(s32 level, RSector* sector, RWall* wall, ClipRect* rect)
+	{
+		if (s_stackPtr >= MAX_ADJOIN_SEG) { return false; }
+
+		RenderEntry* entry = &s_renderStack[s_stackPtr];
+		s_stackPtr++;
+
+		entry->level = level;
+		entry->sector = sector;
+		entry->wall = wall;
+		entry->rect = *rect;
+
+		return true;
+	}
+
+	u32 recurseLevel(s32 level)
+	{
+		u32 start = s_prevPtr;
+		u32 end = s_stackPtr;
+		for (u32 s = start; s < end; s++)
+		{
+			RenderEntry* entry = &s_renderStack[s];
+			if (entry->level != level) { continue; }
+
+			if (viewRect_push(&entry->rect))
+			{
+				// Can pass 's' in as parent.
+				s_sectorGpu->draw(entry->sector);
+				viewRect_pop();
+			}
+		}
+		s_prevPtr = end;
+		return s_stackPtr - end;
+	}
+
+	// This likely won't work as-is; we need the recursion to handle:
+	// * Render portal to stencil with INC
+	// * Render sector where stencil == value, and recurse
+	// * Render done, render portal again (possibly with tranparent texture) with DEC.
+	// * Move on to the next portal.
+	// So instead I need to go back to the original idea and make it work?
+	// Or reorder the draw work based on the original order.
+	// I.e. build the tree one level at a time, but keep the tree structure for rendering.
+	// Keep an index to the parent
+	// Then recurse backwards through the list, building the tree.
+	// i.e.
+#if 0
+	// Build tree.
+	for (s32 s = s_stackPtr - 1; s > 0; s--)
+	{
+		RenderEntry* entry = &s_renderStack[s];
+		if (entry->parent >= 0)
+		{
+			addChild(entry->parent, entry);
+		}
+	}
+	// Recurse tree.
+	RenderEntry* root = &s_renderStack[0];
+	draw(root, 0/*level*/);
+
+	// draw func:
+	// Set Stencil Ref, pass if = level
+	// Disable stencil writes.
+	// Draw Sector Geometry
+	for (s32 i = 0; i < root->childCount; i++)
+	{
+		// NOTE: it should be possible to merge sub-trees that are different views on the same sector, since there is no geometry conflict.
+		// This will reduce the amount of draw calls and recursion.
+
+		// Draw Portal to Stencil,
+		// On Pass, Inc Stencil
+
+		level++;
+		draw(entry->child[i], level);
+		level--;
+
+		// Set Stencil Ref, pass if = level
+		// On Pass, Dec Stencil
+		// Draw Portal To Stencil, draw transparent texture if this is a mask wall.
+	}
+
+	// Draw or collect objects.
+	// In the software renderer, this is where the objects are drawn. However, there is some logic to use the current window or previous.
+	// Replicating that logic won't really work with perspective, so I'm considering just gathering potentially visible objects and letting
+	// the z-buffer sort it out with the level geometry.
+#endif
+
+	void drawMain(RSector* rootSector)
+	{
+		s_level = 0;
+		s_prevPtr = 0;
+
+		// This works in "levels", so the number of usable adjoin segments has maximal utility.
+		// This is needed since the recursion is no longer exact.
+		addRenderEntry(0, rootSector, nullptr, s_viewRect);
+		while (s_stackPtr < s_maxAdjoinSeg && s_level < s_maxRecursion)
+		{
+			if (!recurseLevel(s_level))
+			{
+				break;
+			}
+			s_level++;
+		}
 	}
 	
 	void TFE_Sectors_Gpu::draw(RSector* sector)
 	{
+		if (s_stackPtr == 0 && s_level == 0)
+		{
+			drawMain(sector);
+			return;
+		}
+
 		s_ctx = this;
 		s_curSector = sector;
 		s_sectorIndex++;
-		/*
 		s_adjoinIndex++;
 		if (s_adjoinIndex > s_maxAdjoinIndex)
 		{
 			s_maxAdjoinIndex = s_adjoinIndex;
 		}
-		*/
 
 		SectorCached* cached = &m_cachedSectors[sector->index];
 
@@ -537,8 +793,8 @@ namespace TFE_Jedi
 					wallInfo.textureId = 0;
 					wallInfo.uv0 = { 0,0 };
 					wallInfo.uv1 = { 1,1 };
-
 					TFE_CommandBuffer::addSolidWall(wallInfo);
+					TFE_CommandBuffer::addFloorAndCeiling(wallInfo, (f32)sector->id);
 				}
 				else
 				{
@@ -562,7 +818,12 @@ namespace TFE_Jedi
 						else
 						{
 							// wall_drawBottom(wallSegment);
-							TFE_CommandBuffer::addWallPart(wallInfo, fixed16ToFloat(sector->floorHeight), fixed16ToFloat(nextSector->floorHeight));
+							f32 bot = fixed16ToFloat(sector->floorHeight);
+							f32 top = fixed16ToFloat(nextSector->floorHeight);
+							bot = min(bot, fixed16ToFloat(sector->floorHeight));
+							top = max(top, fixed16ToFloat(sector->ceilingHeight));
+
+							TFE_CommandBuffer::addWallPart(wallInfo, bot, top);
 						}
 					}
 					else if (df == WDF_TOP)
@@ -574,7 +835,12 @@ namespace TFE_Jedi
 						else
 						{
 							// wall_drawTop(wallSegment);
-							TFE_CommandBuffer::addWallPart(wallInfo, fixed16ToFloat(nextSector->ceilingHeight), fixed16ToFloat(sector->ceilingHeight));
+							f32 bot = fixed16ToFloat(nextSector->ceilingHeight);
+							f32 top = fixed16ToFloat(sector->ceilingHeight);
+							bot = min(bot, fixed16ToFloat(sector->floorHeight));
+							top = max(top, fixed16ToFloat(sector->ceilingHeight));
+
+							TFE_CommandBuffer::addWallPart(wallInfo, bot, top);
 						}
 					}
 					else if (df == WDF_TOP_AND_BOT)
@@ -586,18 +852,39 @@ namespace TFE_Jedi
 						else if (nextSector->flags1 & SEC_FLAGS1_EXT_ADJ)
 						{
 							// wall_drawBottom(wallSegment);
-							TFE_CommandBuffer::addWallPart(wallInfo, fixed16ToFloat(sector->floorHeight), fixed16ToFloat(nextSector->floorHeight));
+							f32 bot = fixed16ToFloat(sector->floorHeight);
+							f32 top = fixed16ToFloat(nextSector->floorHeight);
+							bot = min(bot, fixed16ToFloat(sector->floorHeight));
+							top = max(top, fixed16ToFloat(sector->ceilingHeight));
+							
+							TFE_CommandBuffer::addWallPart(wallInfo, bot, top);
 						}
 						else if (nextSector->flags1 & SEC_FLAGS1_EXT_FLOOR_ADJ)
 						{
 							// wall_drawTop(wallSegment);
-							TFE_CommandBuffer::addWallPart(wallInfo, fixed16ToFloat(nextSector->ceilingHeight), fixed16ToFloat(sector->ceilingHeight));
+							f32 bot = fixed16ToFloat(nextSector->ceilingHeight);
+							f32 top = fixed16ToFloat(sector->ceilingHeight);
+							bot = min(bot, fixed16ToFloat(sector->floorHeight));
+							top = max(top, fixed16ToFloat(sector->ceilingHeight));
+
+							TFE_CommandBuffer::addWallPart(wallInfo, bot, top);
 						}
 						else
 						{
 							// wall_drawTopAndBottom(wallSegment);
-							TFE_CommandBuffer::addWallPart(wallInfo, fixed16ToFloat(sector->floorHeight), fixed16ToFloat(nextSector->floorHeight));
-							TFE_CommandBuffer::addWallPart(wallInfo, fixed16ToFloat(nextSector->ceilingHeight), fixed16ToFloat(sector->ceilingHeight));
+							f32 bot = fixed16ToFloat(sector->floorHeight);
+							f32 top = fixed16ToFloat(nextSector->floorHeight);
+							bot = min(bot, fixed16ToFloat(sector->floorHeight));
+							top = max(top, fixed16ToFloat(sector->ceilingHeight));
+
+							TFE_CommandBuffer::addWallPart(wallInfo, bot, top);
+
+							bot = fixed16ToFloat(nextSector->ceilingHeight);
+							top = fixed16ToFloat(sector->ceilingHeight);
+							bot = min(bot, fixed16ToFloat(sector->floorHeight));
+							top = max(top, fixed16ToFloat(sector->ceilingHeight));
+
+							TFE_CommandBuffer::addWallPart(wallInfo, bot, top);
 						}
 					}
 					else // WDF_BOT
@@ -609,9 +896,16 @@ namespace TFE_Jedi
 						else
 						{
 							// wall_drawBottom(wallSegment);
-							TFE_CommandBuffer::addWallPart(wallInfo, fixed16ToFloat(sector->floorHeight), fixed16ToFloat(nextSector->floorHeight));
+							f32 bot = fixed16ToFloat(sector->floorHeight);
+							f32 top = fixed16ToFloat(nextSector->floorHeight);
+							bot = min(bot, fixed16ToFloat(sector->floorHeight));
+							top = max(top, fixed16ToFloat(sector->ceilingHeight));
+
+							TFE_CommandBuffer::addWallPart(wallInfo, bot, top);
 						}
 					}
+
+					TFE_CommandBuffer::addFloorAndCeiling(wallInfo, (f32)sector->id);
 				}
 			}
 
@@ -622,9 +916,13 @@ namespace TFE_Jedi
 
 		TFE_CommandBuffer::drawWalls(cached->quadStart, cached->quadCount);
 
-		// TODO: Next Step - Clip/cull against the window plane.
-		//if (testAdjoins)
-		for (s32 w = 0; w < sector->wallCount && s_adjoinSegCount < MAX_ADJOIN_SEG; w++)
+		// TODO: Rework this loop.
+		// This seems to work better if we do each level all at once.
+		// Level 0 - current sector.
+		// Level 1 - current sector adjoins.
+		// Level 2 - Level 1 adjoins.
+		// ...
+		for (s32 w = 0; w < sector->wallCount && s_adjoinSegCount < s_maxAdjoinSeg; w++)
 		{
 			RWall* wall = &sector->walls[w];
 			RSector* nextSector = wall->nextSector;
@@ -650,6 +948,8 @@ namespace TFE_Jedi
 					continue;
 				}
 
+				addRenderEntry(s_level + 1, nextSector, wall, &windowRect);
+				/*
 				if (viewRect_push(&windowRect))
 				{
 					if (s_showClipRects)
@@ -663,6 +963,7 @@ namespace TFE_Jedi
 					draw(nextSector);
 					viewRect_pop();
 				}
+				*/
 			}
 		}
 				

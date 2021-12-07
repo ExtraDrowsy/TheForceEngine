@@ -37,6 +37,7 @@ namespace TFE_CommandBuffer
 	void setClipRegion(s32 x0, s32 y0, s32 x1, s32 y1);
 	void addSolidWall(const WallInfo& wallInfo);
 	void addWallPart(const WallInfo& wallInfo, f32 bot, f32 top);
+	void addFloorAndCeiling(const WallInfo& wallInfo, f32 id);
 
 	u32  getWallQuadCount();
 	void drawWalls(u32 quadStart, u32 quadCount);

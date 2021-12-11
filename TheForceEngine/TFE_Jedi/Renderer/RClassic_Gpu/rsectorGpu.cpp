@@ -558,6 +558,12 @@ namespace TFE_Jedi
 		rect->planeNormal = { -rect->planeNormal.x, -rect->planeNormal.y, -rect->planeNormal.z };
 		rect->planeVertex = vtxVS[0];
 
+		// TODO:
+		// Convert this to clipping the actual viewspace quad versus the portal frustum.
+		// Then at the next step, we can create a new frustum.
+		// This will work because the scissor rect is being replaced by rendering the portal polygons to the stencil buffer.
+		// Clipping accuracy can be tested before that point.
+
 		// determine if the adjoin is completely behind the portal.
 		Vec3f vtxVSClipped[16];
 		s32 clippedVtx = 0;
@@ -683,6 +689,14 @@ namespace TFE_Jedi
 	// Then recurse backwards through the list, building the tree.
 	// i.e.
 #if 0
+	struct Node
+	{
+		u32 index;
+		u32 childOffset;
+		u32 childCount;
+		u32 pad4;
+	};
+
 	// Build tree.
 	for (s32 s = s_stackPtr - 1; s > 0; s--)
 	{

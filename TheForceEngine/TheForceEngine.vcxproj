@@ -352,6 +352,7 @@ echo ^)";
     <ClInclude Include="TFE_Asset\vueAsset.h" />
     <ClInclude Include="TFE_Audio\audioDevice.h" />
     <ClInclude Include="TFE_Audio\audioSystem.h" />
+    <ClInclude Include="TFE_Audio\iMuseEvent.h" />
     <ClInclude Include="TFE_Audio\midi.h" />
     <ClInclude Include="TFE_Audio\midiDevice.h" />
     <ClInclude Include="TFE_Audio\midiPlayer.h" />
@@ -382,6 +383,7 @@ echo ^)";
     <ClInclude Include="TFE_DarkForces\config.h" />
     <ClInclude Include="TFE_DarkForces\darkForcesMain.h" />
     <ClInclude Include="TFE_DarkForces\gameMessage.h" />
+    <ClInclude Include="TFE_DarkForces\gameMusic.h" />
     <ClInclude Include="TFE_DarkForces\GameUI\agentMenu.h" />
     <ClInclude Include="TFE_DarkForces\GameUI\delt.h" />
     <ClInclude Include="TFE_DarkForces\GameUI\editBox.h" />
@@ -629,6 +631,7 @@ echo ^)";
     <ClCompile Include="TFE_DarkForces\config.cpp" />
     <ClCompile Include="TFE_DarkForces\darkForcesMain.cpp" />
     <ClCompile Include="TFE_DarkForces\gameMessage.cpp" />
+    <ClCompile Include="TFE_DarkForces\gameMusic.cpp" />
     <ClCompile Include="TFE_DarkForces\GameUI\agentMenu.cpp" />
     <ClCompile Include="TFE_DarkForces\GameUI\delt.cpp" />
     <ClCompile Include="TFE_DarkForces\GameUI\editBox.cpp" />

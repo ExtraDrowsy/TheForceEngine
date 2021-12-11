@@ -5,14 +5,12 @@
 
 namespace
 {
-	u32 createDepthBuffer(u32 width, u32 height)
+	u32 createDepthBuffer(u32 width, u32 height, bool includeStencil)
 	{
 		u32 handle = 0;
 		glGenRenderbuffers(1, &handle);
 		glBindRenderbuffer(GL_RENDERBUFFER, handle);
-		// GL_DEPTH_COMPONENT32 is not required to be supported
-		// though GL_DEPTH_COMPONENT24 and GL_DEPTH_COMPONENT32F are.
-		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+		glRenderbufferStorage(GL_RENDERBUFFER, includeStencil ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT24, width, height);
 		glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
 		return handle;
@@ -31,7 +29,7 @@ RenderTarget::~RenderTarget()
 	}
 }
 
-bool RenderTarget::create(TextureGpu* texture, bool depthBuffer)
+bool RenderTarget::create(TextureGpu* texture, bool depthBuffer, bool stencilBuffer)
 {
 	if (!texture) { return false; }
 	m_texture = texture;
@@ -40,12 +38,9 @@ bool RenderTarget::create(TextureGpu* texture, bool depthBuffer)
 	glBindFramebuffer(GL_FRAMEBUFFER, m_gpuHandle);
 	glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, m_texture->getHandle(), 0);
 
-	m_depthBufferHandle = 0;
-	if (depthBuffer)
-	{
-		m_depthBufferHandle = createDepthBuffer(texture->getWidth(), texture->getHeight());
-		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_depthBufferHandle);
-	}
+	m_hasStencilBuffer  = stencilBuffer;
+	m_depthBufferHandle = createDepthBuffer(texture->getWidth(), texture->getHeight(), stencilBuffer);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, stencilBuffer ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_depthBufferHandle);
 
 	// Set the list of draw buffers.
 	GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
@@ -70,7 +65,7 @@ void RenderTarget::bind()
 	glDepthRange(0.0f, 1.0f);
 }
 
-void RenderTarget::clear(const f32* color, f32 depth)
+void RenderTarget::clear(const f32* color, f32 depth, s32 value)
 {
 	if (color)
 		glClearColor(color[0], color[1], color[2], color[3]);
@@ -83,6 +78,13 @@ void RenderTarget::clear(const f32* color, f32 depth)
 		clearFlags |= GL_DEPTH_BUFFER_BIT;
 		TFE_RenderState::setStateEnable(true, STATE_DEPTH_WRITE);
 		glClearDepth(depth);
+
+		if (m_hasStencilBuffer)
+		{
+			clearFlags |= GL_STENCIL_BUFFER_BIT;
+			TFE_RenderState::setStencilMask(0xff);
+			glClearStencil(value);
+		}
 	}
 
 	glClear(clearFlags);
@@ -95,6 +97,16 @@ void RenderTarget::clear(const f32* color, f32 depth)
 		 TFE_RenderState::setStateEnable(true, STATE_DEPTH_WRITE);
 		 glClearDepth(depth);
 		 glClear(GL_DEPTH_BUFFER_BIT);
+	 }
+ }
+
+ void RenderTarget::clearStencil(s32 value)
+ {
+	 if (m_hasStencilBuffer)
+	 {
+		 TFE_RenderState::setStencilMask(0xff);
+		 glClearStencil(value);
+		 glClear(GL_STENCIL_BUFFER_BIT);
 	 }
  }
 

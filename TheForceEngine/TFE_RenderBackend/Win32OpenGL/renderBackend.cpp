@@ -533,12 +533,12 @@ namespace TFE_RenderBackend
 	// GPU commands
 	// core gpu functionality for UI and editor.
 	// Render target.
-	RenderTargetHandle createRenderTarget(u32 width, u32 height, bool hasDepthBuffer)
+	RenderTargetHandle createRenderTarget(u32 width, u32 height, bool hasDepthBuffer, bool hasStencilBuffer)
 	{
 		RenderTarget* newTarget = new RenderTarget();
 		TextureGpu* texture = new TextureGpu();
 		texture->create(width, height);
-		newTarget->create(texture, hasDepthBuffer);
+		newTarget->create(texture, hasDepthBuffer, hasStencilBuffer);
 
 		return RenderTargetHandle(newTarget);
 	}

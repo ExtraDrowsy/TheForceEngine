@@ -170,7 +170,7 @@ namespace TFE_CommandBuffer
 			s_width = width;
 			s_height = height;
 			TFE_RenderBackend::freeRenderTarget(s_renderTarget);
-			s_renderTarget = TFE_RenderBackend::createRenderTarget(s_width, s_height, true);
+			s_renderTarget = TFE_RenderBackend::createRenderTarget(s_width, s_height, true, true);
 		}
 		TFE_RenderBackend::setOutputRenderTarget(s_renderTarget);
 
